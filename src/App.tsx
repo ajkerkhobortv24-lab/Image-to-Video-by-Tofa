@@ -82,6 +82,12 @@ export default function App() {
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [particles, setParticles] = useState<Particle[]>([]);
+  const [offscreenCanvas] = useState(() => {
+    if (typeof document !== 'undefined') {
+      return document.createElement('canvas');
+    }
+    return null;
+  });
 
   // Refs
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -171,15 +177,15 @@ export default function App() {
 
     const getEliteStyle = (idx: number) => {
       const styles = [
-        { zoom: 'in', slide: 'left' },
-        { zoom: 'out', slide: 'right' },
-        { zoom: 'in', slide: 'up' },
-        { zoom: 'out', slide: 'down' },
+        { zoom: 'in', slide: 'left' as const, rotate: 'cw' as const },
+        { zoom: 'out', slide: 'right' as const, rotate: 'ccw' as const },
+        { zoom: 'in', slide: 'up' as const, rotate: 'none' as const },
+        { zoom: 'out', slide: 'down' as const, rotate: 'cw' as const },
       ];
       return styles[idx % styles.length];
     };
 
-    const renderImage = (idx: number, progress: number, type: TransitionType, xOffset: number = 0, yOffset: number = 0, isBackground: boolean = false) => {
+    const renderImage = (idx: number, progress: number, type: TransitionType, xOffset: number = 0, yOffset: number = 0, isBackground: boolean = false, customRot: number = 0) => {
       const currentImgData = images[idx % images.length];
       if (!currentImgData) return;
 
@@ -207,69 +213,60 @@ export default function App() {
       let panY = 0;
       let rot = 0;
       let opacity = 1;
-      let blur = 0;
+      let blurAmount = 0;
 
       const ease = (n: number) => n < 0.5 ? 2 * n * n : -1 + (4 - 2 * n) * n;
       const easeOut = (n: number) => 1 - Math.pow(1 - n, 3);
+      const easeOutQuart = (n: number) => 1 - Math.pow(1 - n, 4);
+      const easeInOutQuint = (n: number) => n < 0.5 ? 16 * n * n * n * n * n : 1 - Math.pow(-2 * n + 2, 5) / 2;
 
       if (type === 'cinematic-3d' || type === 'cinematic-3d-clean' || type === 'cinematic-3d-pro' || type === 'cinematic-3d-elite') {
-        // Multi-Stage Keyframing Logic
         let t = progress;
         const swing = Math.sin(progress * Math.PI * 2) * 0.008;
         const isElite = type === 'cinematic-3d-elite';
         const eliteStyle = isElite ? getEliteStyle(idx) : { zoom: 'in', slide: 'left' };
         
         if (isBackground) {
-          // Background: Slower, more blur
-          const baseScale = eliteStyle.zoom === 'in' ? 1.4 : 1.6;
-          const scaleMod = eliteStyle.zoom === 'in' ? 0.15 : -0.15;
+          const baseScale = eliteStyle.zoom === 'in' ? 1.4 : 1.7;
+          const scaleMod = eliteStyle.zoom === 'in' ? 0.3 : -0.3;
           scale = baseScale + (t * scaleMod);
-          panX = t * 0.03 * canvasW;
-          blur = (type === 'cinematic-3d-pro' || isElite) ? 25 + (t * 15) : 20;
+          panX = t * 0.05 * canvasW;
+          blurAmount = (type === 'cinematic-3d-pro' || isElite) ? 20 + (t * 10) : 15;
           opacity = 0.6;
         } else {
-          // Foreground: 3-Stage Animation
           const baseScale = eliteStyle.zoom === 'in' ? 1.1 : 1.4;
-          const stage1Mod = eliteStyle.zoom === 'in' ? 0.05 : -0.05;
-          const stage2Mod = eliteStyle.zoom === 'in' ? 0.15 : -0.15;
-          const stage3Mod = eliteStyle.zoom === 'in' ? 0.05 : -0.05;
-
+          const scaleMod = eliteStyle.zoom === 'in' ? 0.3 : -0.3;
+          
           if (progress < 0.4) {
-            // Stage 1: Gentle Entry (0-40%)
             const stageT = ease(progress / 0.4);
-            scale = baseScale + (stageT * stage1Mod);
+            scale = baseScale + (stageT * scaleMod * 0.2);
             panX = stageT * -0.02 * canvasW;
           } else if (progress < 0.8) {
-            // Stage 2: Dynamic Push (40-80%)
             const stageT = easeOut((progress - 0.4) / 0.4);
-            scale = (baseScale + stage1Mod) + (stageT * stage2Mod);
+            scale = (baseScale + scaleMod * 0.2) + (stageT * scaleMod * 0.6);
             panX = -0.02 * canvasW + (stageT * -0.06 * canvasW);
             panY = stageT * 0.03 * canvasH;
           } else {
-            // Stage 3: Hold & Transition (80-100%)
             const stageT = (progress - 0.8) / 0.2;
-            scale = (baseScale + stage1Mod + stage2Mod) + (stageT * stage3Mod);
+            scale = (baseScale + scaleMod * 0.8) + (stageT * scaleMod * 0.2);
             panX = -0.08 * canvasW + (stageT * -0.02 * canvasW);
             panY = 0.03 * canvasH;
           }
-          rot = swing + (t * 0.03);
+          rot = swing + (t * 0.03) + customRot;
         }
       } else if (type === 'cinematic-combo') {
         if (progress < 0.5) {
-          // Phase 1: Smooth Zoom In (1.15 -> 1.25)
           const t = ease(progress / 0.5);
           scale = 1.15 + (t * 0.1);
           rot = Math.sin(progress * Math.PI) * 0.01;
         } else {
-          // Phase 2: Deeper Zoom & Pan (1.25 -> 1.4)
           const t = ease((progress - 0.5) / 0.5);
           scale = 1.25 + (t * 0.15);
-          panX = t * -0.1 * canvasW; // Pan Left (10% of width)
-          panY = t * 0.1 * canvasH;  // Pan Down (10% of height)
+          panX = t * -0.1 * canvasW;
+          panY = t * 0.1 * canvasH;
           rot = 0.01 + Math.cos(progress * Math.PI) * 0.01;
         }
       } else {
-        // Standard Transitions - Ensuring they also cover the screen
         scale = 1.1; 
         switch (type) {
           case 'zoom-in': scale = 1.1 + (progress * 0.2); break;
@@ -293,18 +290,25 @@ export default function App() {
       ctx.scale(scale, scale);
       ctx.globalAlpha = opacity;
       
-      if (blur > 0) {
-        ctx.filter = `blur(${blur}px)`;
+      // Optimized Blur using Offscreen Scaling (much faster than ctx.filter)
+      if (blurAmount > 0 && offscreenCanvas) {
+        const blurScale = 0.2; // Scale down for fast blur
+        offscreenCanvas.width = drawW * blurScale;
+        offscreenCanvas.height = drawH * blurScale;
+        const octx = offscreenCanvas.getContext('2d');
+        if (octx) {
+          octx.imageSmoothingEnabled = true;
+          octx.drawImage(img, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
+          ctx.drawImage(offscreenCanvas, -drawW / 2, -drawH / 2, drawW, drawH);
+        }
+      } else {
+        ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
       }
-      
-      // Draw image centered at the transformed origin
-      ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
 
-      // PRO Feature: Bloom/Glow Overlay
+      // PRO Feature: Bloom/Glow Overlay (Simplified for performance)
       if ((type === 'cinematic-3d-pro' || type === 'cinematic-3d-elite') && !isBackground) {
         ctx.globalCompositeOperation = 'lighter';
-        ctx.globalAlpha = 0.15 * Math.sin(progress * Math.PI);
-        ctx.filter = 'blur(10px) brightness(1.5)';
+        ctx.globalAlpha = 0.1 * Math.sin(progress * Math.PI);
         ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
         ctx.globalCompositeOperation = 'source-over';
       }
@@ -313,20 +317,25 @@ export default function App() {
     };
 
     const ease = (n: number) => n < 0.5 ? 2 * n * n : -1 + (4 - 2 * n) * n;
+    const easeInOutQuint = (n: number) => n < 0.5 ? 16 * n * n * n * n * n : 1 - Math.pow(-2 * n + 2, 5) / 2;
 
     if (transType === 'cinematic-3d' || transType === 'cinematic-3d-clean' || transType === 'cinematic-3d-pro' || transType === 'cinematic-3d-elite') {
-      if (t < 0.85) {
+      const transitionThreshold = transType === 'cinematic-3d-elite' ? 0.6 : 0.8;
+      
+      if (t < transitionThreshold) {
         // Normal Parallax Rendering
-        renderImage(imgIndex, t, transType, 0, 0, true); // Background
-        renderImage(imgIndex, t, transType, 0, 0, false); // Foreground
+        const progress = t / transitionThreshold;
+        renderImage(imgIndex, progress, transType, 0, 0, true); // Background
+        renderImage(imgIndex, progress, transType, 0, 0, false); // Foreground
       } else {
         // Seamless Push Transition (No Gaps)
-        const transitionProgress = (t - 0.85) / 0.15;
-        const slideT = ease(transitionProgress);
+        const transitionProgress = (t - transitionThreshold) / (1 - transitionThreshold);
+        const slideT = easeInOutQuint(transitionProgress);
         
         const isElite = transType === 'cinematic-3d-elite';
-        const eliteStyle = isElite ? getEliteStyle(imgIndex) : { slide: 'left' };
-        
+        const eliteStyle = isElite ? getEliteStyle(imgIndex) : { zoom: 'in' as const, slide: 'left' as const, rotate: 'none' as const };
+        const nextEliteStyle = isElite ? getEliteStyle(imgIndex + 1) : { zoom: 'in' as const, slide: 'left' as const, rotate: 'none' as const };
+
         let offX = 0, offY = 0;
         let nextOffX = 0, nextOffY = 0;
 
@@ -337,39 +346,43 @@ export default function App() {
           case 'down': offY = slideT * canvasH; nextOffY = offY - canvasH; break;
         }
         
-        // Current image slides out
-        renderImage(imgIndex, t, transType, offX, offY, true);
-        renderImage(imgIndex, t, transType, offX, offY, false);
-        
-        // PRO Feature: Soft Edge Blur at the junction
-        if (transType === 'cinematic-3d-pro' || isElite) {
-          ctx.save();
-          let gradient;
-          if (eliteStyle.slide === 'left' || eliteStyle.slide === 'right') {
-            const gradX = eliteStyle.slide === 'left' ? offX + canvasW : offX;
-            gradient = ctx.createLinearGradient(gradX - 100, 0, gradX + 100, 0);
-            gradient.addColorStop(0, 'rgba(0,0,0,0)');
-            gradient.addColorStop(0.5, 'rgba(0,0,0,0.8)');
-            gradient.addColorStop(1, 'rgba(0,0,0,0)');
-            ctx.fillStyle = gradient;
-            ctx.globalCompositeOperation = 'destination-out';
-            ctx.fillRect(gradX - 100, 0, 200, canvasH);
-          } else {
-            const gradY = eliteStyle.slide === 'up' ? offY + canvasH : offY;
-            gradient = ctx.createLinearGradient(0, gradY - 100, 0, gradY + 100);
-            gradient.addColorStop(0, 'rgba(0,0,0,0)');
-            gradient.addColorStop(0.5, 'rgba(0,0,0,0.8)');
-            gradient.addColorStop(1, 'rgba(0,0,0,0)');
-            ctx.fillStyle = gradient;
-            ctx.globalCompositeOperation = 'destination-out';
-            ctx.fillRect(0, gradY - 100, canvasW, 200);
-          }
-          ctx.restore();
+        // Elite Rotation Logic
+        let currentRot = 0;
+        let nextRot = 0;
+        const rotAngle = 0.3; 
+        if (isElite) {
+          currentRot = slideT * rotAngle;
+          nextRot = (slideT - 1) * rotAngle;
         }
 
-        // Next image slides in, perfectly attached
-        renderImage(imgIndex + 1, 0, transType, nextOffX, nextOffY, true);
-        renderImage(imgIndex + 1, 0, transType, nextOffX, nextOffY, false);
+        // BRUTE-FORCE OUTSIDE CALCULATION
+        // To be 100% sure it starts outside, we use a distance that accounts for 
+        // max scale (1.4) and rotation. 1.5x canvas dimension is a safe bet.
+        const totalDistX = canvasW * 1.6;
+        const totalDistY = canvasH * 1.6;
+
+        if (eliteStyle.slide === 'left') {
+          offX = -slideT * totalDistX;
+          nextOffX = totalDistX - slideT * totalDistX;
+        } else if (eliteStyle.slide === 'right') {
+          offX = slideT * totalDistX;
+          nextOffX = -totalDistX + slideT * totalDistX;
+        } else if (eliteStyle.slide === 'up') {
+          offY = -slideT * totalDistY;
+          nextOffY = totalDistY - slideT * totalDistY;
+        } else if (eliteStyle.slide === 'down') {
+          offY = slideT * totalDistY;
+          nextOffY = -totalDistY + slideT * totalDistY;
+        }
+
+        // Current image slides out (keeping it at its end state of the first phase)
+        renderImage(imgIndex, 1.0, transType, offX, offY, true, currentRot);
+        renderImage(imgIndex, 1.0, transType, offX, offY, false, currentRot);
+        
+        // Next image slides in from COMPLETELY OUTSIDE
+        // We render it at its progress=0 state so it's ready to start its own animation
+        renderImage(imgIndex + 1, 0, transType, nextOffX, nextOffY, true, nextRot);
+        renderImage(imgIndex + 1, 0, transType, nextOffX, nextOffY, false, nextRot);
       }
     } else if (transType === 'cinematic-combo' && t > 0.8) {
       const transitionProgress = (t - 0.8) / 0.2;
@@ -480,10 +493,10 @@ export default function App() {
     canvas.width = res.width;
     canvas.height = res.height;
 
-    const stream = canvas.captureStream(30); // 30 FPS
+    const stream = canvas.captureStream(30); // 30 FPS fixed
     const recorder = new MediaRecorder(stream, {
       mimeType: 'video/webm;codecs=vp9',
-      videoBitsPerSecond: resolution === '1080p' ? 8000000 : 5000000
+      videoBitsPerSecond: resolution === '1080p' ? 12000000 : 8000000
     });
 
     recordedChunksRef.current = [];
@@ -496,7 +509,7 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `tofa-video-frame-${Date.now()}.webm`;
+      a.download = `tofa-video-v2-${Date.now()}.webm`;
       a.click();
       URL.revokeObjectURL(url);
       
@@ -511,22 +524,29 @@ export default function App() {
       });
     };
 
-    recorder.start();
+    recorder.start(1000); // Collect data every second
 
     // Manual frame-by-frame rendering for export to ensure quality
-    const ctx = canvas.getContext('2d')!;
-    const totalFrames = images.length * duration * 30;
+    const ctx = canvas.getContext('2d', { alpha: false })!;
+    const fps = 30;
+    const frameDelay = 1000 / fps;
+    const totalFrames = images.length * duration * fps;
     
+    // Give recorder a moment to warm up
+    await new Promise(r => setTimeout(r, 500));
+
     for (let i = 0; i < images.length; i++) {
-      for (let f = 0; f < duration * 30; f++) {
-        const t = f / (duration * 30);
+      for (let f = 0; f < duration * fps; f++) {
+        const t = f / (duration * fps);
         drawFrame(ctx, i, t);
-        setExportProgress(((i * duration * 30 + f) / totalFrames) * 100);
-        // Small delay to allow MediaRecorder to catch up
-        await new Promise(r => setTimeout(r, 16)); 
+        setExportProgress(((i * duration * fps + f) / totalFrames) * 100);
+        // Sync with recorder's expected frame rate
+        await new Promise(r => setTimeout(r, frameDelay)); 
       }
     }
 
+    // Give it a final moment to capture the last frame
+    await new Promise(r => setTimeout(r, 500));
     recorder.stop();
   };
 
